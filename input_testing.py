@@ -1,6 +1,7 @@
 import sys
 import cv2
 import numpy
+from collections import deque
 
 print(cv2.__version__)
 
@@ -33,6 +34,7 @@ PREVIEW  = 0  # Preview Mode
 GREY    = 1  # Blurring Filter
 BLUR    = 2  # Corner Feature Detector
 CANNY    = 3  # Canny Edge Detector
+CONTOUR = 4  # Contour Detection
 
 # aspect_ratio = frame_width / frame_height
 # print(aspect_ratio)
@@ -43,6 +45,19 @@ blur_w = 13
 blur_h = 13
 canny_l = 80
 canny_h = 150
+edge_memory = None
+DECAY = 0.9
+BOOST = 1.0
+DISPLAY_THRESHOLD = 0.3
+
+
+def update_edge_memory(edges, memory, decay, boost):
+    if memory is None:
+        memory = numpy.zeros_like(edges, dtype=numpy.float32)
+    memory *= decay
+    edge_mask = edges > 0
+    memory[edge_mask] = numpy.minimum(memory[edge_mask] + boost, 1.0)
+    return memory
 
 while alive:
     has_frame, frame = source.read()
@@ -52,6 +67,7 @@ while alive:
     frame = cv2.flip(frame, 1)
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    bilateral = cv2.bilateralFilter(gray, d=9, sigmaColor=75, sigmaSpace=75)
     if image_filter == PREVIEW:
         cv2.imshow('raw', frame)
     elif image_filter == CANNY:
@@ -59,20 +75,33 @@ while alive:
         greyCanny = cv2.Canny(gray, canny_l, canny_h)
         greyBlurCanny = cv2.Canny(cv2.blur(gray, (blur_w, blur_h)), canny_l, canny_h)
         blurCanny = cv2.Canny(cv2.blur(frame, (blur_w, blur_h)), canny_l, canny_h)
+        greyBilateralCanny = cv2.Canny(bilateral, canny_l, canny_h)
 
         cv2.imshow('raw canny', rawCanny)
         cv2.imshow('grey canny', greyCanny)
         # cv2.imshow(f'blurry canny, w: {blur_w} h: {blur_h}', blurCanny)
         cv2.imshow('blurry canny', blurCanny)
         cv2.imshow('grey blurry canny', greyBlurCanny)
+        cv2.imshow('grey bilateral canny', greyBilateralCanny)
     elif image_filter == BLUR:
         blurry = cv2.blur(frame, (blur_w, blur_h))
         greyBlurry = cv2.blur(gray, (blur_w,blur_h))
         # cv2.imshow(f'raw blur, w: {blur_w} h: {blur_h}', blurry)
         cv2.imshow(f'raw blur', blurry)
         cv2.imshow('grey blur', greyBlurry)
+        cv2.imshow('bilateral', bilateral)
     elif image_filter == GREY:
         cv2.imshow('grey',gray)
+    elif image_filter == CONTOUR:
+        smoothed = cv2.bilateralFilter(gray, 9, 75, 75)
+        edges = cv2.Canny(smoothed, canny_l, canny_h)
+        edge_memory = update_edge_memory(edges, edge_memory, DECAY, BOOST)
+        faded_display = (edge_memory * 255).astype(numpy.uint8)
+        thresholded_display = ((edge_memory >= DISPLAY_THRESHOLD) * 255).astype(numpy.uint8)
+        cv2.imshow('raw edges', edges)
+        cv2.imshow('fading memory', faded_display)
+        cv2.imshow('thresholded memory', thresholded_display)
+
     key = cv2.waitKey(1) & 0xFF
     if key == ord("0") or key == 27:
         alive = False
@@ -101,9 +130,11 @@ while alive:
             if canny_l < canny_h -1 :
                 canny_l += 1
         print(f"canny_l = {canny_l}, canny_h = {canny_h}")
-    elif key in (ord("1"), ord("2"), ord("3"), ord("4")): 
+    elif key in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5")):
         cv2.destroyAllWindows()
-        if key == ord("4"):
+        if key == ord("5"):
+            image_filter = CONTOUR
+        elif key == ord("4"):
             image_filter = CANNY
         elif key == ord("3"):
             image_filter = BLUR
@@ -111,6 +142,7 @@ while alive:
             image_filter = GREY
         elif key == ord("1"):
             image_filter = PREVIEW
+        edge_memory = None 
 
 source.release()
 cv2.destroyAllWindows()
