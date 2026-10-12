@@ -103,3 +103,58 @@ def put_status(frame, lines):
         origin = (10, 25 + 25 * i)
         cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
         cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.6, GREEN, 2)
+
+
+def warp_page(frame, corners):
+    """Flatten the quad `corners` (TL, TR, BR, BL) into an upright rectangle.
+
+    The output is mirrored back, because the live feed is flipped for display
+    and a book viewed in a mirror would otherwise read backwards.
+    Returns None if the quad is degenerate.
+    """
+    if corners is None:
+        return None
+    src = numpy.asarray(corners, dtype=numpy.float32).reshape(4, 2)
+    tl, tr, br, bl = src
+    width = int(round(max(numpy.linalg.norm(tr - tl), numpy.linalg.norm(br - bl))))
+    height = int(round(max(numpy.linalg.norm(bl - tl), numpy.linalg.norm(br - tr))))
+    if width < 8 or height < 8:
+        return None
+    dst = numpy.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+                      dtype=numpy.float32)
+    matrix = cv2.getPerspectiveTransform(src, dst)
+    page = cv2.warpPerspective(frame, matrix, (width, height))
+    return cv2.flip(page, 1)
+
+
+def fit_in_slot(image, slot_w, slot_h, label=""):
+    """Letterbox `image` into a black slot_w x slot_h tile (placeholder text if None)."""
+    tile = numpy.full((slot_h, slot_w, 3), 40, dtype=numpy.uint8)  # dark grey so the panel is visible
+    if image is None:
+        cv2.putText(tile, "no page", (10, slot_h // 2), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6, (120, 120, 120), 2)
+    else:
+        scale = min(slot_w / image.shape[1], slot_h / image.shape[0])
+        new_w = max(1, int(image.shape[1] * scale))
+        new_h = max(1, int(image.shape[0] * scale))
+        resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        x0, y0 = (slot_w - new_w) // 2, (slot_h - new_h) // 2
+        tile[y0:y0 + new_h, x0:x0 + new_w] = resized
+    if label:
+        cv2.putText(tile, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
+        cv2.putText(tile, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, GREEN, 2)
+    return tile
+
+
+def render_pages_panel(frame, page_corners, panel_w, panel_h):
+    """Tile the flattened pages side by side into one panel_w x panel_h image.
+
+    `page_corners` is a list of (label, corners_or_None), one tile each.
+    """
+    slot_w = panel_w // len(page_corners)
+    tiles = [fit_in_slot(warp_page(frame, corners), slot_w, panel_h, label)
+             for label, corners in page_corners]
+    panel = numpy.hstack(tiles)
+    if panel.shape[1] < panel_w:  # integer division left a few spare pixels
+        panel = numpy.pad(panel, ((0, 0), (0, panel_w - panel.shape[1]), (0, 0)))
+    return panel
